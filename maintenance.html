@@ -1975,6 +1975,8 @@
           const result = await response.json().catch(() => ({}));
           if (typeof result.message === "string" && result.message) {
             failureText = result.message;
+          } else {
+            failureText = "Server replied " + response.status;
           }
           if (typeof result.ref === "string") serverRef = result.ref;
 
@@ -1993,9 +1995,9 @@
             failureText = "The request took too long.";
           }
           showStatus(
-         "err",
-         "Sorry, we couldn’t send your message. Please try again later or contact us at pandeyashish2056@gmail.com."
-         );
+            "err",
+            "Sorry, we couldn’t send your message (" + failureText + "). Please try again later or contact us at"
+          );
           const link = document.createElement("a");
           link.href = "mailto:" + TO;
           link.textContent = TO;
