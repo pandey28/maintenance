@@ -61,7 +61,8 @@ export async function onRequest(context) {
     return json({ error: "Verification unavailable", message: "Security verification unavailable. Please try again." }, 503);
   }
   if (!verification.success) {
-    return json({ error: "Security check failed", message: "Security check failed. Please try again." }, 403);
+    const codes = (verification["error-codes"] || []).join(", ") || "no code";
+    return json({ error: "Security check failed", message: "Security check failed: " + codes }, 403);
   }
 
   // Send to your email through FormSubmit
