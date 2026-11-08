@@ -1846,8 +1846,8 @@
       const statusEl = document.getElementById("status");
       const sendBtn = document.getElementById("send");
       const TO = "pandeyashish2056@gmail.com";
-      // Same-site Cloudflare Pages Function: functions/api/contact.js
-      const CONTACT_API_URL = "https://formsubmit.co/ajax/pandeyashish2056@gmail.com";
+      // Handled by the Cloudflare Worker through a route on your own domain (see setup steps).
+      const CONTACT_API_URL = "/api/contact";
       let turnstileToken = "";
 
       window.onTurnstileSuccess = (token) => {
@@ -1992,10 +1992,10 @@
           if (error && error.name === "AbortError") {
             failureText = "The request took too long.";
           }
-        showStatus(
-       "err",
-       "Sorry, we couldn’t send your message. Please try again later or contact us at pandeyashish2056@gmail.com."
-        );
+          showStatus(
+         "err",
+         "Sorry, we couldn’t send your message. Please try again later or contact us at pandeyashish2056@gmail.com."
+         );
           const link = document.createElement("a");
           link.href = "mailto:" + TO;
           link.textContent = TO;
