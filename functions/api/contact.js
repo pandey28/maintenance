@@ -1,294 +1,126 @@
-// functions/api/contact.js  ->  handles POST /api/contact on Cloudflare Pages
-//
-// Flow: read JSON -> check honeypot -> validate fields -> verify Turnstile (server side)
-//       -> forward to FormSubmit -> report success ONLY if FormSubmit says it succeeded.
-//
-// Secrets: the Turnstile SECRET key is read from the Pages secret `TURNSTILE_SECRET`.
-// It is never sent to the browser and never logged.
+// Cloudflare Worker: contact form -> Turnstile check -> FormSubmit -> your inbox
+// Required settings in Cloudflare (Workers > your worker > Settings > Variables and Secrets):
+//   TURNSTILE_SECRET_KEY  (type: Secret)  -> the SECRET key from Cloudflare Turnstile
+//   FORM_SUBMIT_EMAIL     (type: Text)    -> pandeyashish2056@gmail.com
 
-const TO_EMAIL = "pandeyashish2056@gmail.com";
-const SITE_ORIGIN = "https://www.ashishpandey.com.np";
-const ALLOWED_HOSTNAMES = ["ashishpandey.com.np", "www.ashishpandey.com.np"];
-const TURNSTILE_VERIFY_URL =
-  "https://challenges.cloudflare.com/turnstile/v0/siteverify";
-const LIMITS = { name: 100, email: 254, message: 5000, token: 2048, body: 20000 };
-const PROVIDER_TIMEOUT_MS = 10000;
+// Websites allowed to call this Worker (your real domain, not github.io)
+const ALLOWED_ORIGINS = [
+  "https://www.ashishpandey.com.np",
+  "https://ashishpandey.com.np"
+];
 
-// ---------- small helpers ----------
+export default {
+  async fetch(request, env) {
+    const origin = request.headers.get("Origin") || "";
+    const allowed = ALLOWED_ORIGINS.includes(origin);
 
-const respond = (ref, status, code, message, extraHeaders = {}) =>
-  new Response(
-    JSON.stringify({ success: status === 200, code, message, ref }),
-    {
-      status,
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": "no-store",
-        ...extraHeaders,
-      },
-    },
-  );
-
-// Safe diagnostic log: only short codes and numbers. NEVER pass the visitor's
-// name, email, message, the CAPTCHA token or any secret in here.
-const log = (ref, stage, details = {}) =>
-  console.log(JSON.stringify({ app: "contact-form", ref, stage, ...details }));
-
-const text = (value) => (typeof value === "string" ? value.trim() : "");
-
-const shorten = (value) =>
-  typeof value === "string" ? value.replace(/\s+/g, " ").slice(0, 160) : "";
-
-// Accepts JSON (what the website sends) and also normal form posts.
-async function readBody(request) {
-  const type = (request.headers.get("content-type") || "").toLowerCase();
-
-  if (type.includes("application/json")) {
-    const data = await request.json();
-    if (!data || typeof data !== "object" || Array.isArray(data)) {
-      throw new Error("invalid_body");
-    }
-    return data;
-  }
-
-  if (type.includes("form")) {
-    const form = await request.formData();
-    return {
-      name: form.get("name"),
-      email: form.get("email"),
-      message: form.get("message"),
-      website: form.get("website") ?? form.get("_honey"),
-      turnstileToken:
-        form.get("turnstileToken") ?? form.get("cf-turnstile-response"),
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": allowed ? origin : ALLOWED_ORIGINS[0],
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+      "Vary": "Origin"
     };
-  }
 
-  throw new Error("unsupported_content_type");
-}
-
-// ---------- the route ----------
-
-export async function onRequestPost({ request, env }) {
-  const ref = crypto.randomUUID().slice(0, 8); // lets you match a browser error to a log line
-  const started = Date.now();
-  // same as log(), but also records total milliseconds so far (to find slow steps)
-  const note = (stage, details = {}) =>
-    log(ref, stage, { ...details, totalMs: Date.now() - started });
-
-  try {
-    // 1) Read and parse the request
-    const length = Number(request.headers.get("content-length") || 0);
-    if (length > LIMITS.body) {
-      note("rejected_too_large");
-      return respond(ref, 413, "too_large", "Your message is too large.");
+    if (request.method === "OPTIONS") {
+      return new Response(null, { status: allowed ? 204 : 403, headers: corsHeaders });
     }
+    if (!allowed) return json({ error: "Origin not allowed" }, 403, corsHeaders);
+    if (request.method !== "POST") return json({ error: "Method not allowed" }, 405, corsHeaders);
 
     let data;
-    try {
-      data = await readBody(request);
-    } catch {
-      note("rejected_bad_request");
-      return respond(ref, 400, "bad_request", "The request could not be read.");
-    }
+    try { data = await request.json(); }
+    catch { return json({ error: "Invalid request" }, 400, corsHeaders); }
 
-    const name = text(data.name);
-    const email = text(data.email);
-    const message = text(data.message);
-    const token = text(data.turnstileToken);
-    const honey = text(data.website) || text(data._honey);
+    const name = String(data.name || "").trim();
+    const email = String(data.email || "").trim();
+    const message = String(data.message || "").trim();
+    const website = String(data.website || "").trim(); // honeypot
+    const token = String(data.turnstileToken || "").trim();
 
-    // 2) Honeypot: real visitors leave it empty. Pretend success, send nothing.
-    if (honey) {
-      note("honeypot_triggered");
-      return respond(ref, 200, "ok", "Thank you! Your message has been received.");
-    }
+    // Honeypot filled = bot. Pretend success.
+    if (website) return json({ success: true }, 200, corsHeaders);
 
-    // 3) Validate input
-    if (!token) {
-      note("rejected_missing_token");
-      return respond(
-        ref,
-        400,
-        "missing_token",
-        "Please complete the security check and try again.",
-      );
-    }
     if (
-      !name ||
-      !email ||
-      !message ||
-      name.length > LIMITS.name ||
-      email.length > LIMITS.email ||
-      message.length > LIMITS.message ||
-      token.length > LIMITS.token ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+      !name || name.length > 100 ||
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 ||
+      !message || message.length > 5000 ||
+      !token
     ) {
-      note("rejected_invalid_fields", {
-        hasName: Boolean(name),
-        hasEmail: Boolean(email),
-        hasMessage: Boolean(message),
-      });
-      return respond(
-        ref,
-        400,
-        "invalid_fields",
-        "Please check your name, email and message and try again.",
-      );
+      return json({ error: "Please check the fields and security verification." }, 400, corsHeaders);
     }
 
-    if (!env.TURNSTILE_SECRET) {
-      note("config_missing_turnstile_secret");
-      return respond(ref, 500, "not_configured", "The contact form is not configured yet.");
+    // Basic spam filters: no line breaks in name/email (header injection), and few links.
+    const linkCount = (message.match(/https?:\/\/|www\./gi) || []).length;
+    if (/[\r\n]/.test(name) || /[\r\n]/.test(email) || linkCount > 2 || /https?:\/\//i.test(name)) {
+      return json({ error: "Your message looks like spam. Please remove extra links and try again." }, 400, corsHeaders);
     }
 
-    // 4) Verify the Turnstile token with Cloudflare (server side)
+    // Verify Turnstile on the server
+    const ip = request.headers.get("CF-Connecting-IP") || "";
+    const verifyBody = new FormData();
+    verifyBody.append("secret", env.TURNSTILE_SECRET_KEY);
+    verifyBody.append("response", token);
+    if (ip) verifyBody.append("remoteip", ip);
+
     let verification;
-    const turnstileStart = Date.now();
     try {
-      const params = new URLSearchParams({
-        secret: env.TURNSTILE_SECRET,
-        response: token,
-      });
-      const ip = request.headers.get("CF-Connecting-IP");
-      if (ip) params.set("remoteip", ip);
-
-      const verifyResponse = await fetch(TURNSTILE_VERIFY_URL, {
+      const r = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: params,
-        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+        body: verifyBody
       });
-
-      if (!verifyResponse.ok) {
-        note("turnstile_http_error", { httpStatus: verifyResponse.status });
-        return respond(
-          ref,
-          502,
-          "captcha_unavailable",
-          "The security check is temporarily unavailable. Please try again.",
-        );
-      }
-      verification = await verifyResponse.json();
-      note("turnstile_checked", { turnstileMs: Date.now() - turnstileStart });
-    } catch (error) {
-      note("turnstile_unreachable", {
-        error: error instanceof Error ? error.name : "unknown",
-      });
-      return respond(
-        ref,
-        502,
-        "captcha_unavailable",
-        "The security check is temporarily unavailable. Please try again.",
-      );
-    }
-
-    if (!verification || verification.success !== true) {
-      const codes = Array.isArray(verification?.["error-codes"])
-        ? verification["error-codes"].map(String).slice(0, 5)
-        : [];
-      note("turnstile_failed", { codes });
-
-      if (
-        codes.includes("invalid-input-secret") ||
-        codes.includes("missing-input-secret")
-      ) {
-        return respond(ref, 500, "not_configured", "The contact form is not configured correctly.");
-      }
-      if (codes.includes("timeout-or-duplicate")) {
-        return respond(
-          ref,
-          403,
-          "captcha_expired",
-          "The security check expired. Please tick it again and resend.",
-        );
-      }
-      return respond(ref, 403, "captcha_failed", "Security check failed. Please try again.");
-    }
-
-    if (!ALLOWED_HOSTNAMES.includes(verification.hostname)) {
-      note("turnstile_wrong_hostname", {
-        hostname: shorten(String(verification.hostname || "")),
-      });
-      return respond(ref, 403, "captcha_hostname", "Security check failed. Please try again.");
-    }
-
-    // 5) Forward to FormSubmit and check the response BODY, not just the HTTP status
-    let providerResponse;
-    let providerText;
-    const mailStart = Date.now();
-    try {
-      providerResponse = await fetch(`https://formsubmit.co/ajax/${TO_EMAIL}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          // FormSubmit's AJAX endpoint is built for browsers; tell it which site this is.
-          Origin: SITE_ORIGIN,
-          Referer: `${SITE_ORIGIN}/`,
-        },
-        body: JSON.stringify({
-          name,
-          email,
-          message,
-          _subject: "New portfolio contact message",
-          _template: "table",
-          _captcha: "false", // Turnstile already did the bot check
-        }),
-        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
-      });
-      providerText = await providerResponse.text();
-      note("mail_provider_answered", { mailMs: Date.now() - mailStart });
-    } catch (error) {
-      note("mail_provider_unreachable", {
-        error: error instanceof Error ? error.name : "unknown",
-      });
-      return respond(
-        ref,
-        502,
-        "mail_unavailable",
-        "Could not send your message right now. Please try again later.",
-      );
-    }
-
-    let result = null;
-    try {
-      result = JSON.parse(providerText);
+      verification = await r.json();
     } catch {
-      result = null;
+      return json({ error: "Security verification unavailable. Please try again." }, 503, corsHeaders);
+    }
+    if (!verification.success) {
+      return json({ error: "Security check failed. Please try again." }, 403, corsHeaders);
     }
 
-    // FormSubmit answers {"success":"true", ...} (a string). Accept true too.
-    const sent =
-      providerResponse.ok &&
-      result !== null &&
-      (result.success === true || result.success === "true");
+    // Send to FormSubmit
+    const payload = {
+      name,
+      email,
+      message,
+      _subject: "New message from ashishpandey.com.np",
+      _template: "table",
+      _captcha: "false", // we already verified with Turnstile
+      _replyto: email
+    };
 
-    if (!sent) {
-      note("mail_provider_rejected", {
-        httpStatus: providerResponse.status,
-        providerSuccess: result ? String(result.success) : "not-json",
-        providerMessage: shorten(result?.message),
-        contentType: shorten(providerResponse.headers.get("content-type") || ""),
-      });
-      return respond(
-        ref,
-        502,
-        "mail_failed",
-        "Could not send your message right now. Please try again later.",
+    let mailResponse;
+    try {
+      mailResponse = await fetch(
+        "https://formsubmit.co/ajax/" + encodeURIComponent(env.FORM_SUBMIT_EMAIL),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Origin": "https://www.ashishpandey.com.np",
+            "Referer": "https://www.ashishpandey.com.np/"
+          },
+          body: JSON.stringify(payload)
+        }
       );
+    } catch {
+      return json({ error: "Email service unavailable. Please try again later." }, 502, corsHeaders);
     }
 
-    note("sent");
-    return respond(ref, 200, "sent", "Your message was sent successfully!");
-  } catch (error) {
-    note("unexpected_error", {
-      error: error instanceof Error ? error.name : "unknown",
-    });
-    return respond(ref, 500, "server_error", "Something went wrong. Please try again later.");
-  }
-}
+    let mailResult = {};
+    try { mailResult = await mailResponse.json(); } catch {}
+    if (!mailResponse.ok || !(mailResult.success === true || mailResult.success === "true")) {
+      // This shows up in Workers > Logs, so you can see FormSubmit's real reply.
+      console.log("FormSubmit rejected:", mailResponse.status, JSON.stringify(mailResult));
+      return json({ error: "Email service did not accept the message. Please try again later." }, 502, corsHeaders);
+    }
 
-// Any other method (GET, PUT, ...) gets a clean JSON answer instead of the web page.
-export function onRequest() {
-  return respond("-", 405, "method_not_allowed", "Please use POST.", { Allow: "POST" });
+    return json({ success: true }, 200, corsHeaders);
+  }
+};
+
+function json(body, status, headers = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...headers }
+  });
 }
