@@ -1520,11 +1520,6 @@
         -webkit-backdrop-filter: blur(6px);
       }
     </style>
-    <script
-      src="https://challenges.cloudflare.com/turnstile/v0/api.js"
-      async
-      defer
-    ></script>
   </head>
   <body>
     <div class="scene" aria-hidden="true"><div class="cover"></div></div>
@@ -1758,7 +1753,17 @@
         <hr />
 
         <div class="row">
-          <button class="btn" id="openContact" type="button">Contact Me</button>
+          <a
+            class="btn"
+            href="mailto:pandeyashish2056@gmail.com"
+            style="display:inline-flex;align-items:center;justify-content:center;text-decoration:none;"
+            >Contact Me</a
+          >
+          <a
+            href="mailto:pandeyashish2056@gmail.com"
+            style="color:var(--muted);text-decoration:none;font-size:0.95rem;letter-spacing:0.04em;word-break:break-all;"
+            >pandeyashish2056@gmail.com</a
+          >
         </div>
 
         <footer style="margin-top: 34px">
@@ -1772,245 +1777,5 @@
       </main>
     </div>
 
-    <!-- Contact box -->
-    <div
-      class="modal"
-      id="modal"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="ct"
-    >
-      <div class="card">
-        <button class="close" id="closeContact" aria-label="Close">
-          &times;
-        </button>
-        <h2 id="ct">Get in <span>Touch</span></h2>
-        <p class="sub">
-          Send me a message and it will land directly in my inbox.
-        </p>
-        <form id="form" novalidate>
-          <label for="name">Your Name</label>
-          <input
-            id="name"
-            name="name"
-            type="text"
-            required
-            maxlength="100"
-            autocomplete="name"
-          />
-          <label for="email">Your Email</label>
-          <input
-            id="email"
-            name="email"
-            type="email"
-            required
-            maxlength="254"
-            autocomplete="email"
-          />
-          <label for="message">Message</label>
-          <textarea
-            id="message"
-            name="message"
-            required
-            maxlength="5000"
-          ></textarea>
-          <!-- Honeypot: real visitors should leave this field empty. -->
-          <div class="hp" aria-hidden="true">
-            <label for="website">Leave this field empty</label>
-            <input
-              id="website"
-              type="text"
-              name="_honey"
-              tabindex="-1"
-              autocomplete="off"
-            />
-          </div>
-          <!-- Replace YOUR_TURNSTILE_SITE_KEY with the public site key from Cloudflare Turnstile. -->
-          <div
-            class="cf-turnstile"
-            data-sitekey="0x4AAAAAAFqU2CZZPOmUWGHS"
-            data-callback="onTurnstileSuccess"
-            data-expired-callback="onTurnstileExpired"
-            data-error-callback="onTurnstileExpired"
-            data-theme="dark"
-          ></div>
-          <button class="btn" id="send" type="submit">Send Message</button>
-          <div class="status" id="status" role="status"></div>
-        </form>
-      </div>
-    </div>
-
-    <script>
-      const modal = document.getElementById("modal");
-      const form = document.getElementById("form");
-      const statusEl = document.getElementById("status");
-      const sendBtn = document.getElementById("send");
-      const TO = "pandeyashish2056@gmail.com";
-      // Handled by the Cloudflare Worker through a route on your own domain (see setup steps).
-      const CONTACT_API_URL = "/api/contact";
-      let turnstileToken = "";
-
-      window.onTurnstileSuccess = (token) => {
-        turnstileToken = token;
-      };
-      window.onTurnstileExpired = () => {
-        turnstileToken = "";
-      };
-
-      // These checks help against simple bots and accidental repeated submissions.
-      // They are client-side protections, not a replacement for server-side rate limits.
-      let formOpenedAt = 0;
-      let lastSubmitAt = 0;
-      const MIN_FILL_TIME_MS = 2500;
-      const SUBMIT_COOLDOWN_MS = 15000;
-      const REQUEST_TIMEOUT_MS = 20000; // give up after 20 seconds instead of freezing
-
-      const open = () => {
-        modal.classList.add("open");
-        formOpenedAt = Date.now();
-        setTimeout(() => document.getElementById("name").focus(), 50);
-      };
-
-      const close = () => modal.classList.remove("open");
-
-      document.getElementById("openContact").addEventListener("click", open);
-      document.getElementById("closeContact").addEventListener("click", close);
-
-      modal.addEventListener("click", (event) => {
-        if (event.target === modal) close();
-      });
-
-      document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") close();
-      });
-
-      function showStatus(type, message) {
-        statusEl.className = "status " + type;
-        statusEl.textContent = message;
-      }
-
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-
-        if (sendBtn.disabled) return;
-
-        const data = Object.fromEntries(new FormData(form));
-        const name = String(data.name || "").trim();
-        const email = String(data.email || "").trim();
-        const message = String(data.message || "").trim();
-        const honey = String(data._honey || "").trim();
-        const now = Date.now();
-
-        statusEl.className = "status";
-        statusEl.textContent = "";
-
-        // Bots that automatically fill every input often populate the honeypot.
-        if (honey) {
-          form.reset();
-          showStatus("ok", "Thank you! Your message has been received.");
-          return;
-        }
-
-        if (formOpenedAt && now - formOpenedAt < MIN_FILL_TIME_MS) {
-          showStatus(
-            "err",
-            "Please take a moment to review your message and try again.",
-          );
-          return;
-        }
-
-        if (lastSubmitAt && now - lastSubmitAt < SUBMIT_COOLDOWN_MS) {
-          showStatus("err", "Please wait a few seconds before trying again.");
-          return;
-        }
-
-        if (
-          !name ||
-          name.length > 100 ||
-          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
-          email.length > 254 ||
-          !message ||
-          message.length > 5000
-        ) {
-          showStatus(
-            "err",
-            "Please fill in all fields with a valid email and keep your message under 5,000 characters.",
-          );
-          return;
-        }
-
-        if (!turnstileToken) {
-          showStatus(
-            "err",
-            "Please complete the security check before sending.",
-          );
-          return;
-        }
-
-        sendBtn.disabled = true;
-        sendBtn.textContent = "Sending...";
-        // Tell the visitor it is working so they do not click again.
-        showStatus("", "Sending your message, please wait (it can take a few seconds)...");
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-        let failureText = "Could not send right now.";
-        let serverRef = "";
-
-        try {
-          const response = await fetch(CONTACT_API_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name,
-              email,
-              message,
-              website: honey,
-              turnstileToken,
-            }),
-            signal: controller.signal,
-          });
-
-          // The server answers with JSON; if it ever does not, fall back safely.
-          const result = await response.json().catch(() => ({}));
-          if (typeof result.message === "string" && result.message) {
-            failureText = result.message;
-          } else {
-            failureText = "Server replied " + response.status;
-          }
-          if (typeof result.ref === "string") serverRef = result.ref;
-
-          if (response.ok && result.success === true) {
-            lastSubmitAt = Date.now();
-            showStatus("ok", "Thank you! Your message has been sent.");
-            form.reset();
-            formOpenedAt = Date.now();
-            turnstileToken = "";
-            if (window.turnstile) window.turnstile.reset();
-          } else {
-            throw new Error(failureText);
-          }
-        } catch (error) {
-          if (error && error.name === "AbortError") {
-            failureText = "The request took too long.";
-          }
-          showStatus(
-            "err",
-            "Sorry, we couldn’t send your message (" + failureText + "). Please try again later or contact us at"
-          );
-          const link = document.createElement("a");
-          link.href = "mailto:" + TO;
-          link.textContent = TO;
-          link.style.color = "#fff";
-          statusEl.append(" ", link);
-          turnstileToken = "";
-          if (window.turnstile) window.turnstile.reset();
-        } finally {
-          clearTimeout(timeoutId);
-          sendBtn.disabled = false;
-          sendBtn.textContent = "Send Message";
-        }
-      });
-    </script>
   </body>
 </html>
